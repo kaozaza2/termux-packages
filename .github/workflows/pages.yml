@@ -16,7 +16,7 @@ on:
     branches: [master]
     paths:
       - "packages/**"
-      - "scripts/setup-upstream.sh"
+      - "scripts/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -29,31 +29,78 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  # Prebuilt android/arm64 binary, published by kaozaza2/opencode-termux.
+  # Termux's cross toolchain needs an x64 host and tens of GB of disk, so the
+  # binary is taken from the release and only wrapped as a .deb here.
+  OPENCODE_VERSION: "2.0.18"
+  OPENCODE_RELEASE_URL: "https://github.com/kaozaza2/opencode-termux/releases/download/2.0.18-termux/opencode-termux-2.0.18.tar.gz"
+
 jobs:
   build:
-    name: Generate package index
+    name: Generate site and APT repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/configure-pages@v5
 
+      - name: Build opencode .deb
+        id: deb
+        # A failure here must not take the site offline; the deploy step below
+        # still publishes the index.
+        continue-on-error: true
+        run: |
+          set -eu
+          mkdir -p build debs
+          curl -fsSL --retry 3 -o build/opencode.tar.gz "$OPENCODE_RELEASE_URL"
+          tar xzf build/opencode.tar.gz -C build
+          test -f build/opencode
+          ./scripts/package-prebuilt.sh \
+            build/opencode "$OPENCODE_VERSION" debs opencode
+
+      - name: Generate APT repository
+        # The official generator, fetched as a single file rather than pip
+        # installed: it is one script, and this avoids PEP 668 on the runner.
+        continue-on-error: true
+        run: |
+          set -eu
+          if ! ls debs/*.deb >/dev/null 2>&1; then
+            echo "no .deb built; publishing the site without dists/"
+            exit 0
+          fi
+          curl -fsSL --retry 3 -o /tmp/termux-apt-repo \
+            https://raw.githubusercontent.com/termux/termux-apt-repo/v0.5/termux-apt-repo
+          python3 /tmp/termux-apt-repo debs _site stable main
+
       - name: Generate index.html
         run: |
           set -eu
-          mkdir -p _site
+          if [ -f _site/dists/stable/Release ]; then
+            REPO_HINT='<p>Add this repository to Termux:</p>
+<pre><code>mkdir -p $PREFIX/etc/apt/sources.list.d
+echo "deb [trusted=yes] https://kaozaza2.github.io/termux-packages stable main" \
+  &gt; $PREFIX/etc/apt/sources.list.d/termux-packages.list
+apt update
+pkg install opencode</code></pre>'
+          else
+            REPO_HINT='<p>No packages have been built yet, so there is no APT index. The package list below is built from source recipes.</p>'
+          fi
           {
             echo '<!DOCTYPE html>'
             echo '<html lang="en"><head><meta charset="utf-8">'
             echo '<meta name="viewport" content="width=device-width,initial-scale=1">'
             echo "<title>${GITHUB_REPOSITORY}</title>"
             echo '<style>'
-            echo 'body{font:16px/1.6 system-ui,sans-serif;max-width:44rem;margin:3rem auto;padding:0 1rem}'
+            echo 'body{font:16px/1.6 system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1rem}'
             echo 'code{background:#f0f0f0;padding:2px 6px;border-radius:4px}'
+            echo 'pre{background:#f6f8fa;padding:12px;border-radius:6px;overflow-x:auto}'
             echo 'a{color:#0969da}</style>'
             echo '</head><body>'
             echo "<h1>${GITHUB_REPOSITORY}</h1>"
             echo '<p>Packages that do not exist in <a href="https://github.com/termux/termux-packages">termux/termux-packages</a>.</p>'
+            echo "$REPO_HINT"
+            echo '<h2>Packages</h2>'
             echo '<ul>'
           } > _site/index.html
           for d in packages/*/; do
@@ -71,7 +118,27 @@ jobs:
           } >> _site/index.html
           cat _site/index.html
 
+      - name: Verify repository layout
+        if: always()
+        run: |
+          set -eu
+          fail=0
+          for p in dists/stable/Release \
+                   dists/stable/main/binary-aarch64/Packages \
+                   dists/stable/main/binary-aarch64/Packages.xz; do
+            if [ -f "_site/$p" ]; then
+              echo "ok      $p"
+            else
+              echo "MISSING $p"
+              fail=1
+            fi
+          done
+          ls _site/dists/stable/main/binary-aarch64/*.deb 2>/dev/null \
+            || { echo "MISSING no .deb published"; fail=1; }
+          exit $fail
+
       - uses: actions/upload-pages-artifact@v3
+        if: always()
         with:
           path: _site
 
