@@ -1,0 +1,87 @@
+name: Deploy package index to Pages
+
+# Replaces the legacy Jekyll build, which cannot be used here: it walks the
+# repository root and calls realpath() on every symlink, so it aborts on the
+# first dangling one. This repository tracks symlinks into .upstream-packages/,
+# which is fetched at build time and so never present in a checkout. Upstream
+# also ships one already-dangling link of its own, in
+# disabled-packages/protobuf-static/retain-linker-array.patch, which broke the
+# legacy build before this fork had any changes.
+#
+# Building the artifact ourselves avoids Jekyll entirely, so symlinks in the
+# tree are irrelevant to the site.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "packages/**"
+      - "scripts/setup-upstream.sh"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Generate package index
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      - name: Generate index.html
+        run: |
+          set -eu
+          mkdir -p _site
+          {
+            echo '<!DOCTYPE html>'
+            echo '<html lang="en"><head><meta charset="utf-8">'
+            echo '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            echo "<title>${GITHUB_REPOSITORY}</title>"
+            echo '<style>'
+            echo 'body{font:16px/1.6 system-ui,sans-serif;max-width:44rem;margin:3rem auto;padding:0 1rem}'
+            echo 'code{background:#f0f0f0;padding:2px 6px;border-radius:4px}'
+            echo 'a{color:#0969da}</style>'
+            echo '</head><body>'
+            echo "<h1>${GITHUB_REPOSITORY}</h1>"
+            echo '<p>Packages that do not exist in <a href="https://github.com/termux/termux-packages">termux/termux-packages</a>.</p>'
+            echo '<ul>'
+          } > _site/index.html
+          for d in packages/*/; do
+            [ -f "$d/build.sh" ] || continue
+            name="$(basename "$d")"
+            version="$(sed -n 's/^TERMUX_PKG_VERSION=//p' "$d/build.sh" | head -n1)"
+            version="${version%\"}"; version="${version#\"}"
+            printf '<li><code>pkg install %s</code> &mdash; %s</li>\n' \
+              "$name" "${version:-unknown}" >> _site/index.html
+          done
+          {
+            echo '</ul>'
+            echo '<p>Upstream package definitions are fetched with <code>./scripts/setup-upstream.sh</code>.</p>'
+            echo '</body></html>'
+          } >> _site/index.html
+          cat _site/index.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
