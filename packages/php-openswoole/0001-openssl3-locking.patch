@@ -1,0 +1,62 @@
+Compile out the pre-1.1.0 OpenSSL locking callbacks for OpenSSL 1.1.0 and later.
+
+CRYPTO_set_locking_callback() was removed in OpenSSL 1.1.0, where locking
+became internal to libcrypto. The two calls to it in src/protocol/ssl.cc sit
+outside the existing OPENSSL_VERSION_NUMBER guards, so on any modern OpenSSL
+they are hard compile errors:
+
+    src/protocol/ssl.cc:119: error: 'CRYPTO_set_locking_callback' was not declared
+    src/protocol/ssl.cc:174: error: 'CRYPTO_set_locking_callback' was not declared
+
+Termux builds php 8.5.1 with --with-openssl=$TERMUX_PREFIX against OpenSSL
+3.6.3. That makes php-config report openssl as enabled, and
+include/openswoole_compat.h maps SW_USE_OPENSSL to OSW_USE_OPENSSL, so this
+file is compiled with the SSL paths active even though the extension's own
+--enable-openssl defaults to no. Dropping --with-openssl-dir from the package
+therefore does not avoid this.
+
+The lock_array bookkeeping only exists to feed those callbacks, so it is
+guarded along with them rather than left in place.
+
+Upstream carries no OpenSSL 3 support in any release (checked master, v26.2.0,
+v25.2.0 and v22.1.2: none reference 0x30000000, OPENSSL_VERSION_MAJOR,
+OSSL_PARAM or EVP_MD_fetch), so this has to be a local patch.
+--- a/src/protocol/ssl.cc	2026-09-26 16:25:05.600073324 +0700
++++ b/src/protocol/ssl.cc	2026-09-26 16:25:13.128073321 +0700
+@@ -111,12 +111,15 @@
+ 
+     OPENSSL_free(lock_array);
+ 
+-#if OPENSSL_VERSION_NUMBER >= OPENSSL_VERSION_1_0_0
++#if OPENSSL_VERSION_NUMBER >= 0x10100000L
++    /* OpenSSL >= 1.1.0 does its own locking; there is no callback to clear. */
++#elif OPENSSL_VERSION_NUMBER >= OPENSSL_VERSION_1_0_0
+     (void) CRYPTO_THREADID_set_callback(nullptr);
++    CRYPTO_set_locking_callback(nullptr);
+ #else
+     CRYPTO_set_id_callback(nullptr);
+-#endif
+     CRYPTO_set_locking_callback(nullptr);
++#endif
+     openssl_init = false;
+     openssl_thread_safety_init = false;
+ }
+@@ -165,13 +168,15 @@
+         pthread_mutex_init(&(lock_array[i]), nullptr);
+     }
+ 
+-#if OPENSSL_VERSION_NUMBER >= OPENSSL_VERSION_1_0_0
++#if OPENSSL_VERSION_NUMBER >= 0x10100000L
++    /* OpenSSL >= 1.1.0 does its own locking; no callback to install. */
++#elif OPENSSL_VERSION_NUMBER >= OPENSSL_VERSION_1_0_0
+     (void) CRYPTO_THREADID_set_callback(openswoole_ssl_id_callback);
++    CRYPTO_set_locking_callback(openswoole_ssl_lock_callback);
+ #else
+     CRYPTO_set_id_callback(openswoole_ssl_id_callback);
+-#endif
+-
+     CRYPTO_set_locking_callback(openswoole_ssl_lock_callback);
++#endif
+     openssl_thread_safety_init = true;
+ }
+ 
