@@ -16,6 +16,13 @@ scripts/*.log
 /*\.tar
 /*\.tar\.*
 
+# Upstream package definitions, fetched by scripts/setup-upstream.sh. The
+# placeholder is committed so the committed symlinks never dangle: a dangling
+# link makes scripts/buildorder.py die with a bare FileNotFoundError, whereas an
+# empty directory produces its actual "depends on non-existing package" message.
+.upstream-packages/*
+!/.upstream-packages/.gitkeep
+
 # Source files.
 /sources/
 

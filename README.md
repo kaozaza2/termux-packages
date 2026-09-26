@@ -1,5 +1,40 @@
 # Termux packages
 
+## kaozaza2/termux-packages
+
+This fork carries only the packages that upstream does not ship. The packages
+added here are:
+
+| Package | Version | What it is |
+| --- | --- | --- |
+| `opencode` | 2.0.18 | AI coding agent for the terminal, built against bionic |
+| `php-openswoole` | 26.2.0 | OpenSwoole PHP extension: async IO, coroutines, fibers |
+
+Upstream's 2216 package definitions are **not** committed here. They are the
+dependency graph the build system needs, so they are fetched on demand:
+
+```sh
+./scripts/setup-upstream.sh    # required once after cloning
+```
+
+That clones `termux/termux-packages` into `.upstream-packages/` and creates the
+`upstream-packages`, `x11-packages`, `root-packages` and `disabled-packages`
+symlinks that `repo.json` points at. Re-run it to pick up upstream changes.
+`Sync fork` on GitHub is not needed and will conflict, since this fork
+intentionally diverges from upstream.
+
+Without it, `scripts/buildorder.py` reports `depends on non-existing package`
+for every dependency, because it resolves `TERMUX_PKG_DEPENDS` against the
+package directories present on disk.
+
+To add a package, check the name is not taken upstream first:
+
+```sh
+ls .upstream-packages/termux-packages/packages/ | grep -i <name>
+```
+
+---
+
 ![GitHub repo size](https://img.shields.io/github/repo-size/termux/termux-packages)
 [![Packages last build status](https://github.com/termux/termux-packages/actions/workflows/packages.yml/badge.svg?branch=master)](https://github.com/termux/termux-packages/actions)
 [![Docker image status](https://github.com/termux/termux-packages/workflows/Docker%20image/badge.svg)](https://hub.docker.com/r/termux/package-builder)

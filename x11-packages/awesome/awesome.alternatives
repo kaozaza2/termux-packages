@@ -1,6 +1,0 @@
-Name: x-window-manager
-Link: bin/x-window-manager
-Alternative: bin/awesome
-Priority: 50
-
-# vim: ft=raml
