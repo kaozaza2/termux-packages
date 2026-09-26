@@ -8,7 +8,6 @@ added here are:
 | Package | Version | What it is |
 | --- | --- | --- |
 | `opencode` | 2.0.18 | AI coding agent for the terminal, built against bionic |
-| `php-openswoole` | 26.2.0 | OpenSwoole PHP extension: async IO, coroutines, fibers |
 
 Upstream's 2216 package definitions are **not** committed here. They are the
 dependency graph the build system needs, so they are fetched on demand:
