@@ -1,15 +1,20 @@
-name: Deploy package index to Pages
+name: Publish APT repository to Pages
 
-# Replaces the legacy Jekyll build, which cannot be used here: it walks the
-# repository root and calls realpath() on every symlink, so it aborts on the
-# first dangling one. This repository tracks symlinks into .upstream-packages/,
-# which is fetched at build time and so never present in a checkout. Upstream
-# also ships one already-dangling link of its own, in
+# Serves only the APT repository: dists/stable/... and the .deb files.
+#
+# There is deliberately no index.html. A Pages site without one returns 404 at
+# the root, so the tree is not browsable by hand, and robots.txt disallows
+# everything for crawlers. That is as close to "only apt can read this" as
+# GitHub Pages allows: gh.io has no authentication, so any file served here is
+# technically public. Real access restriction would need a different host.
+#
+# This replaced the legacy Jekyll build, which cannot be used here: it walks
+# the repository root and calls realpath() on every symlink, so it aborts on
+# the first dangling one. This repository tracks symlinks into
+# .upstream-packages/, which is fetched at build time and so never present in a
+# checkout. Upstream also ships one already-dangling link of its own, in
 # disabled-packages/protobuf-static/retain-linker-array.patch, which broke the
 # legacy build before this fork had any changes.
-#
-# Building the artifact ourselves avoids Jekyll entirely, so symlinks in the
-# tree are irrelevant to the site.
 
 on:
   push:
@@ -38,7 +43,7 @@ env:
 
 jobs:
   build:
-    name: Generate site and APT repository
+    name: Build debs and generate repository index
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,9 +51,8 @@ jobs:
       - uses: actions/configure-pages@v5
 
       - name: Build opencode .deb
-        id: deb
-        # A failure here must not take the site offline; the deploy step below
-        # still publishes the index.
+        # A failure here must not publish a half-built repository; the verify
+        # step below turns it into a red run instead of a silent 404.
         continue-on-error: true
         run: |
           set -eu
@@ -66,79 +70,52 @@ jobs:
         run: |
           set -eu
           if ! ls debs/*.deb >/dev/null 2>&1; then
-            echo "no .deb built; publishing the site without dists/"
+            echo "no .deb built; nothing to publish"
             exit 0
           fi
           curl -fsSL --retry 3 -o /tmp/termux-apt-repo \
             https://raw.githubusercontent.com/termux/termux-apt-repo/v0.5/termux-apt-repo
           python3 /tmp/termux-apt-repo debs _site stable main
 
-      - name: Generate index.html
+      - name: Discourage crawlers
         run: |
           set -eu
-          if [ -f _site/dists/stable/Release ]; then
-            REPO_HINT='<p>Add this repository to Termux:</p>
-<pre><code>mkdir -p $PREFIX/etc/apt/sources.list.d
-echo "deb [trusted=yes] https://kaozaza2.github.io/termux-packages stable main" \
-  &gt; $PREFIX/etc/apt/sources.list.d/termux-packages.list
-apt update
-pkg install opencode</code></pre>'
-          else
-            REPO_HINT='<p>No packages have been built yet, so there is no APT index. The package list below is built from source recipes.</p>'
-          fi
-          {
-            echo '<!DOCTYPE html>'
-            echo '<html lang="en"><head><meta charset="utf-8">'
-            echo '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            echo "<title>${GITHUB_REPOSITORY}</title>"
-            echo '<style>'
-            echo 'body{font:16px/1.6 system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1rem}'
-            echo 'code{background:#f0f0f0;padding:2px 6px;border-radius:4px}'
-            echo 'pre{background:#f6f8fa;padding:12px;border-radius:6px;overflow-x:auto}'
-            echo 'a{color:#0969da}</style>'
-            echo '</head><body>'
-            echo "<h1>${GITHUB_REPOSITORY}</h1>"
-            echo '<p>Packages that do not exist in <a href="https://github.com/termux/termux-packages">termux/termux-packages</a>.</p>'
-            echo "$REPO_HINT"
-            echo '<h2>Packages</h2>'
-            echo '<ul>'
-          } > _site/index.html
-          for d in packages/*/; do
-            [ -f "$d/build.sh" ] || continue
-            name="$(basename "$d")"
-            version="$(sed -n 's/^TERMUX_PKG_VERSION=//p' "$d/build.sh" | head -n1)"
-            version="${version%\"}"; version="${version#\"}"
-            printf '<li><code>pkg install %s</code> &mdash; %s</li>\n' \
-              "$name" "${version:-unknown}" >> _site/index.html
-          done
-          {
-            echo '</ul>'
-            echo '<p>Upstream package definitions are fetched with <code>./scripts/setup-upstream.sh</code>.</p>'
-            echo '</body></html>'
-          } >> _site/index.html
-          cat _site/index.html
+          mkdir -p _site
+          printf 'User-agent: *\nDisallow: /\n' > _site/robots.txt
 
       - name: Verify repository layout
-        if: always()
         run: |
           set -eu
           fail=0
           for p in dists/stable/Release \
                    dists/stable/main/binary-aarch64/Packages \
-                   dists/stable/main/binary-aarch64/Packages.xz; do
+                   dists/stable/main/binary-aarch64/Packages.xz \
+                   robots.txt; do
             if [ -f "_site/$p" ]; then
-              echo "ok      $p"
+              echo "ok      /$p"
             else
-              echo "MISSING $p"
+              echo "MISSING /$p"
               fail=1
             fi
           done
-          ls _site/dists/stable/main/binary-aarch64/*.deb 2>/dev/null \
-            || { echo "MISSING no .deb published"; fail=1; }
+          if ls _site/dists/stable/main/binary-aarch64/*.deb >/dev/null 2>&1; then
+            echo "ok      /dists/stable/main/binary-aarch64/*.deb"
+          else
+            echo "MISSING no .deb published"
+            fail=1
+          fi
+          # No human-facing index, by request.
+          if [ -e _site/index.html ]; then
+            echo "UNEXPECTED /index.html exists; the site is meant to be apt-only"
+            fail=1
+          else
+            echo "ok      no index.html (root 404s by design)"
+          fi
+          echo "--- published tree ---"
+          find _site -type f | sort
           exit $fail
 
       - uses: actions/upload-pages-artifact@v3
-        if: always()
         with:
           path: _site
 
