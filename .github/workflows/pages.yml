@@ -63,6 +63,36 @@ jobs:
           ./scripts/package-prebuilt.sh \
             build/opencode "$OPENCODE_VERSION" debs opencode
 
+      - name: Verify deb install paths
+        # A Termux deb must carry the absolute path ./data/data/com.termux/
+        # files/usr/... in data.tar, because Termux's dpkg is a stock dpkg with
+        # root "/". A $PREFIX-relative ./bin/<name> entry would install into
+        # /bin, so assert the real path rather than trusting the script.
+        run: |
+          set -eu
+          if ! ls debs/*.deb >/dev/null 2>&1; then
+            echo "no .deb to check"
+            exit 0
+          fi
+          fail=0
+          contents="$(mktemp)"
+          for deb in debs/*.deb; do
+            echo "--- $deb"
+            ar t "$deb"
+            ar p "$deb" data.tar.xz | tar -tJf - | tee "$contents"
+            if grep -q '^\./data/data/com\.termux/files/usr/bin/' "$contents"; then
+              echo "ok      installs under the Termux prefix"
+            else
+              echo "BAD     no ./data/data/com.termux/files/usr/bin/ entry"
+              fail=1
+            fi
+            if grep -q '^\./bin/' "$contents"; then
+              echo "BAD     contains a /bin entry; would install outside the prefix"
+              fail=1
+            fi
+          done
+          exit $fail
+
       - name: Generate APT repository
         # The official generator, fetched as a single file rather than pip
         # installed: it is one script, and this avoids PEP 668 on the runner.

@@ -32,10 +32,18 @@ done
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$STAGE/root/bin" "$STAGE/control"
 
-install -m 755 "$BINARY" "$STAGE/root/bin/$PKGNAME"
-SIZE_KB=$(( $(wc -c < "$STAGE/root/bin/$PKGNAME") / 1024 ))
+# The install path is absolute, not $PREFIX-relative. Termux ships a stock dpkg
+# with root "/", so data.tar carries the full path: the real Termux deb
+# sl_5.05-1_aarch64.deb contains ./data/data/com.termux/files/usr/bin/sl.
+# A ./bin/<name> entry would install into /bin, which is not writable and not
+# on the user's PATH.
+TERMUX_PREFIX="${TERMUX_PREFIX:-/data/data/com.termux/files/usr}"
+BINDIR="root${TERMUX_PREFIX}/bin"
+mkdir -p "$STAGE/$BINDIR" "$STAGE/control"
+
+install -m 755 "$BINARY" "$STAGE/$BINDIR/$PKGNAME"
+SIZE_KB=$(( $(wc -c < "$STAGE/$BINDIR/$PKGNAME") / 1024 ))
 
 cat > "$STAGE/control/control" <<EOF
 Package: $PKGNAME
@@ -65,7 +73,8 @@ TMPDEB="$STAGE/build.deb"
 # it lists a deb's contents.
 printf '2.0\n' > "$STAGE/debian-binary"
 tar -C "$STAGE/control" -cJf "$STAGE/control.tar.xz" ./control
-tar -C "$STAGE/root" -cJf "$STAGE/data.tar.xz" ./bin
+# Archive the whole absolute path from /, so entries read ./data/data/.../bin/.
+tar -C "$STAGE/root" -cJf "$STAGE/data.tar.xz" "./${TERMUX_PREFIX#/}/bin"
 
 rm -f "$DEB"
 ( cd "$STAGE" && ar rc "$TMPDEB" debian-binary control.tar.xz data.tar.xz )
